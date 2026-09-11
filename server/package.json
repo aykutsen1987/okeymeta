@@ -1,0 +1,17 @@
+{
+  "name": "okeymeta-online-server",
+  "version": "1.0.0",
+  "description": "Authoritative WebSocket server for OkeyMeta Game's online multiplayer (quick match + private room).",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "license": "UNLICENSED"
+}
