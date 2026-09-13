@@ -176,7 +176,7 @@ function isWinningHand(hand) {
   return canPartitionIntoMelds(hand);
 }
 
-/** Checks the alternative "pairs hand" (çift el) win: 7 identical pairs (14 tiles). */
+/** Checks the alternative "pairs hand" win: 7 identical pairs (14 tiles). */
 function isPairsWinningHand(hand) {
   if (hand.length !== 14) return false;
   const used = new Array(hand.length).fill(false);

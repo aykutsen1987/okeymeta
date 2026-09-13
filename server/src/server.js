@@ -71,6 +71,9 @@ wss.on('connection', (socket) => {
         case 'leave_room':
           handleLeaveRoom(playerId);
           break;
+        case 'start_next_round':
+          handleStartNextRound(playerId);
+          break;
         default:
           sendError(socket, `Bilinmeyen mesaj tipi: ${msg.type}`);
       }
@@ -160,6 +163,16 @@ function startRoomHand(room) {
   room.sendToAll(() => ({ type: 'turn_started', activePlayerId: state.turn.activePlayerId, timeLimitSeconds: state.turn.timeLimitSeconds }));
 }
 
+function handleStartNextRound(playerId) {
+  const room = roomOf(playerId);
+  if (!room || !room.gameState) return;
+  if (!room.gameState.isRoundOver) return;
+  const state = room.startNextHand();
+  room.sendToAll((viewerId) => ({ type: 'state_sync', state: maskStateFor(state, viewerId) }));
+  room.sendToAll(() => ({ type: 'turn_started', activePlayerId: state.turn.activePlayerId, timeLimitSeconds: state.turn.timeLimitSeconds }));
+  maybeRunBotTurns(room);
+}
+
 function handleDrawTile(playerId, msg) {
   const room = roomOf(playerId);
   if (!room || !room.gameState) return;
@@ -167,9 +180,20 @@ function handleDrawTile(playerId, msg) {
     sendErrorTo(playerId, 'Sira sizde degil.');
     return;
   }
+  if (room.gameState.isRoundOver) return;
+  if (room.gameState.turn.phase !== 'AWAITING_DRAW') {
+    sendErrorTo(playerId, 'Once tas atmaniz gerekiyor.');
+    return;
+  }
+
   const state = msg.fromDiscard ? drawFromDiscard(room.gameState) : drawFromPile(room.gameState);
   room.sendToAll((viewerId) => ({ type: 'state_sync', state: maskStateFor(state, viewerId) }));
   room.sendToAll(() => ({ type: 'tile_drawn', fromDiscard: !!msg.fromDiscard }));
+
+  // Closed pile ran out (drawFromPile flips isRoundOver) — no winner, round is a draw.
+  if (state.isRoundOver) {
+    finishRoundAsDraw(room);
+  }
 }
 
 function handleDiscardTile(playerId, msg) {
@@ -179,6 +203,12 @@ function handleDiscardTile(playerId, msg) {
     sendErrorTo(playerId, 'Sira sizde degil.');
     return;
   }
+  if (room.gameState.isRoundOver) return;
+  if (room.gameState.turn.phase !== 'AWAITING_DISCARD') {
+    sendErrorTo(playerId, 'Once tas cekmeniz gerekiyor.');
+    return;
+  }
+
   const state = discardTile(room.gameState, msg.tileId);
   room.sendToAll((viewerId) => ({ type: 'state_sync', state: maskStateFor(state, viewerId) }));
   room.sendToAll(() => ({ type: 'tile_discarded', tileId: msg.tileId, nextPlayerId: state.turn.activePlayerId }));
@@ -282,6 +312,11 @@ function maybeRunBotTurns(room) {
     room.sendToAll((viewerId) => ({ type: 'state_sync', state: maskStateFor(s1, viewerId) }));
     room.sendToAll(() => ({ type: 'tile_drawn', fromDiscard: false }));
 
+    if (s1.isRoundOver) {
+      finishRoundAsDraw(room);
+      return;
+    }
+
     const refreshed = s1.players.find((p) => p.id === active.id);
     const discardTileChoice = refreshed.hand[Math.floor(Math.random() * refreshed.hand.length)];
     const s2 = discardTile(s1, discardTileChoice.id);
@@ -299,6 +334,15 @@ function finishRound(room, winnerId) {
   const scores = {};
   for (const p of state.players) scores[p.id] = p.id === winnerId ? 100 : 0;
   room.sendToAll(() => ({ type: 'game_finished', winnerId, scores }));
+}
+
+/** Closed pile emptied with nobody declaring a winning hand — round ends in a draw. */
+function finishRoundAsDraw(room) {
+  const state = room.gameState;
+  state.isRoundOver = true;
+  const scores = {};
+  for (const p of state.players) scores[p.id] = 0;
+  room.sendToAll(() => ({ type: 'game_finished', winnerId: null, scores }));
 }
 
 // ---------------------------------------------------------------------------

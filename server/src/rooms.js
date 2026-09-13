@@ -17,7 +17,7 @@ function generateRoomCode(existingCodes) {
 class Room {
   constructor(code, isPrivate) {
     this.code = code;
-    this.isPrivate = isPrivate; // true = created via "Oda Oluştur" (private room / code join)
+    this.isPrivate = isPrivate; // true = created via "Create Room" (private room / code join)
     this.players = new Map(); // playerId -> { id, name, seat, socket, connected, kind }
     this.gameState = null; // null until the hand starts
     this.disconnectTimers = new Map(); // playerId -> Timeout
@@ -84,6 +84,25 @@ class Room {
       .map((p) => ({ id: p.id, name: p.name, kind: p.kind, seat: p.seat }));
     const mode = this.isPrivate ? 'PRIVATE_ROOM' : 'ONLINE_MULTIPLAYER';
     this.gameState = dealNewRound(orderedPlayers, `room-${this.code}`, mode, 0);
+    return this.gameState;
+  }
+
+  startNextHand() {
+    const prevState = this.gameState;
+    const scoreById = new Map((prevState?.players || []).map((p) => [p.id, p.score || 0]));
+    const prevRoundNumber = prevState?.roundNumber || 1;
+    const prevDealerSeat = (prevState?.turn?.turnNumber !== undefined && prevState.players)
+      ? (prevState.players.find((p) => p.hand && p.hand.length === 15)?.seat ?? 0)
+      : 0;
+
+    const orderedPlayers = [...this.players.values()]
+      .sort((a, b) => a.seat - b.seat)
+      .map((p) => ({ id: p.id, name: p.name, kind: p.kind, seat: p.seat, score: scoreById.get(p.id) || 0 }));
+
+    const mode = this.isPrivate ? 'PRIVATE_ROOM' : 'ONLINE_MULTIPLAYER';
+    const nextDealerSeat = (prevDealerSeat + 1) % orderedPlayers.length;
+    this.gameState = dealNewRound(orderedPlayers, `room-${this.code}`, mode, nextDealerSeat);
+    this.gameState.roundNumber = prevRoundNumber + 1;
     return this.gameState;
   }
 

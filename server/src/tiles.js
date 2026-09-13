@@ -40,7 +40,7 @@ function shuffle(arr) {
   return arr;
 }
 
-/** Pulls the gösterge (indicator) and derives the real Okey tile (one value above it, 13->1 wraps). */
+/** Pulls the indicator tile and derives the real Okey tile (one value above it, 13->1 wraps). */
 function determineIndicatorAndOkey(deck) {
   const indicator = deck.shift();
   const okeyValue = indicator.value === 13 ? 1 : indicator.value + 1;
