@@ -10,6 +10,14 @@ const { createFullDeck, determineIndicatorAndOkey, sortHand, TILE_COLORS } = req
 function dealNewRound(players, gameId, mode, dealerSeat = 0) {
   const deck = createFullDeck();
   const { indicator, okeyTile } = determineIndicatorAndOkey(deck);
+  // Flag the physical Okey tiles: only the detached okeyTile copy carried isRealOkey before, so the
+  // joker never acted as a wild in isWinningHand / isPairsWinningHand.
+  for (let i = 0; i < deck.length; i++) {
+    const t = deck[i];
+    if (!t.isFakeOkey && t.color === okeyTile.color && t.value === okeyTile.value) {
+      deck[i] = { ...t, isRealOkey: true };
+    }
+  }
 
   const dealtPlayers = players.map((player, index) => {
     const handSize = index === dealerSeat ? 15 : 14;
@@ -116,21 +124,20 @@ function isValidMeld(tiles) {
 }
 
 function isSequentialRun(tiles) {
+  if (tiles.length > 13) return false;
   const wildCount = tiles.filter(tileIsWild).length;
-  const fixedValues = tiles.filter((t) => !tileIsWild(t)).map((t) => t.value).sort((a, b) => a - b);
-  if (new Set(fixedValues).size !== fixedValues.length) return false;
-  if (fixedValues.length === 0) return true;
+  const fixed = tiles.filter((t) => !tileIsWild(t)).map((t) => t.value);
+  if (new Set(fixed).size !== fixed.length) return false;
+  if (fixed.length === 0) return true;
 
-  let gapsNeeded = 0;
-  for (let i = 0; i < fixedValues.length - 1; i++) {
-    const diff = fixedValues[i + 1] - fixedValues[i];
-    if (diff === 0) return false;
-    if (diff > 1) {
-      const wraps = fixedValues[i] === 13 && fixedValues[i + 1] === 1;
-      gapsNeeded += wraps ? 0 : diff - 1;
-    }
-  }
-  return gapsNeeded <= wildCount;
+  // 1 may be low (1-2-3) or high (12-13-1), but a run never wraps through the middle (13-1-2).
+  const fits = (values) => {
+    const sorted = [...values].sort((x, y) => x - y);
+    let gaps = 0;
+    for (let i = 0; i < sorted.length - 1; i++) gaps += sorted[i + 1] - sorted[i] - 1;
+    return gaps <= wildCount;
+  };
+  return fits(fixed) || fits(fixed.map((v) => (v === 1 ? 14 : v)));
 }
 
 function combinations(list, k) {
@@ -151,23 +158,36 @@ function removeAll(list, toRemove) {
   return result;
 }
 
-/** Recursive partition search — small because it only ever runs on a 14-tile hand. */
+/**
+ * Recursive partition search. The first tile must belong to some meld of 3..13 tiles (sets are
+ * capped at 4 inside isValidMeld, runs can be longer), and only tiles that could share a meld with
+ * it (same color for a run, same value for a set, or a wild) are tried as partners.
+ */
 function canPartitionIntoMelds(remaining) {
   if (remaining.length === 0) return true;
   if (remaining.length < 3) return false;
 
-  for (const size of [3, 4]) {
-    if (remaining.length < size) continue;
-    const rest = remaining.slice(1);
-    const candidates = combinations(rest, size - 1).map((c) => [remaining[0], ...c]);
-    for (const group of candidates) {
-      if (isValidMeld(group)) {
-        const leftover = removeAll(remaining, group);
-        if (canPartitionIntoMelds(leftover)) return true;
+  const ordered = [...remaining].sort((x, y) => Number(tileIsWild(x)) - Number(tileIsWild(y)));
+  const first = ordered[0];
+  const rest = ordered.slice(1);
+  const runPool = tileIsWild(first) ? rest : rest.filter((t) => tileIsWild(t) || t.color === first.color);
+  const setPool = tileIsWild(first) ? rest : rest.filter((t) => tileIsWild(t) || t.value === first.value);
+
+  const tryGroups = (pool, maxSize) => {
+    for (let size = 3; size <= maxSize; size++) {
+      if (size - 1 > pool.length) break;
+      const leftoverSize = ordered.length - size;
+      if (leftoverSize === 1 || leftoverSize === 2) continue;
+      for (const combo of combinations(pool, size - 1)) {
+        const group = [first, ...combo];
+        if (!isValidMeld(group)) continue;
+        if (canPartitionIntoMelds(removeAll(ordered, group))) return true;
       }
     }
-  }
-  return false;
+    return false;
+  };
+
+  return tryGroups(runPool, Math.min(ordered.length, 13)) || tryGroups(setPool, Math.min(ordered.length, 4));
 }
 
 /** Checks whether `hand` (14 tiles) is a complete winning hand of melds. */
@@ -176,27 +196,22 @@ function isWinningHand(hand) {
   return canPartitionIntoMelds(hand);
 }
 
-/** Checks the alternative "pairs hand" win: 7 identical pairs (14 tiles). */
+/**
+ * Checks the alternative "pairs hand" win: 7 identical pairs (14 tiles). Wilds are only assigned
+ * AFTER natural pairs are counted: each unpaired tile needs one wild, leftover wilds pair up.
+ */
 function isPairsWinningHand(hand) {
   if (hand.length !== 14) return false;
-  const used = new Array(hand.length).fill(false);
-  let pairs = 0;
-  for (let i = 0; i < hand.length; i++) {
-    if (used[i]) continue;
-    for (let j = i + 1; j < hand.length; j++) {
-      if (used[j]) continue;
-      const a = hand[i];
-      const b = hand[j];
-      const matches = tileIsWild(a) || tileIsWild(b) || (a.color === b.color && a.value === b.value);
-      if (matches) {
-        used[i] = true;
-        used[j] = true;
-        pairs++;
-        break;
-      }
-    }
+  const wilds = hand.filter(tileIsWild).length;
+  const counts = new Map();
+  for (const t of hand) {
+    if (tileIsWild(t)) continue;
+    const key = `${t.color}:${t.value}`;
+    counts.set(key, (counts.get(key) || 0) + 1);
   }
-  return pairs === 7;
+  let singles = 0;
+  for (const c of counts.values()) singles += c % 2;
+  return singles <= wilds && (wilds - singles) % 2 === 0;
 }
 
 function checkWin(hand) {

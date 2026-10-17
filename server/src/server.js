@@ -60,7 +60,7 @@ wss.on('connection', (socket) => {
           handleDiscardTile(playerId, msg);
           break;
         case 'declare_win':
-          handleDeclareWin(playerId);
+          handleDeclareWin(playerId, msg);
           break;
         case 'chat':
           handleChat(playerId, msg);
@@ -216,11 +216,27 @@ function handleDiscardTile(playerId, msg) {
   maybeRunBotTurns(room);
 }
 
-function handleDeclareWin(playerId) {
+function handleDeclareWin(playerId, msg) {
   const room = roomOf(playerId);
-  if (!room || !room.gameState) return;
+  if (!room || !room.gameState || room.gameState.isRoundOver) return;
+  if (room.gameState.turn.activePlayerId !== playerId) {
+    sendErrorTo(playerId, 'Sira sizde degil.');
+    return;
+  }
   const player = room.gameState.players.find((p) => p.id === playerId);
-  if (!player || !checkWin(player.hand)) {
+  if (!player) return;
+
+  // With 15 tiles in hand the client names the tile it throws as its last one; the remaining 14
+  // must then be a complete hand. Without a tileId the 14 tiles already held must be complete.
+  let hand = player.hand;
+  if (msg && msg.tileId !== undefined && msg.tileId !== null) {
+    if (!hand.some((t) => t.id === msg.tileId)) {
+      sendErrorTo(playerId, 'Secilen tas elinizde yok.');
+      return;
+    }
+    hand = hand.filter((t) => t.id !== msg.tileId);
+  }
+  if (!checkWin(hand)) {
     sendErrorTo(playerId, 'Elinizle bitis yapilamaz — kombinasyonlari kontrol edin.');
     return;
   }
